@@ -1,0 +1,48 @@
+[packages.myapp-core]
+versioned_files = ["crates/core/Cargo.toml", { path = "crates/api/Cargo.toml", dependency = "myapp-core" }, { path = "crates/cli/Cargo.toml", dependency = "myapp-core" }, "Cargo.lock"]
+scopes = ["myapp-core"]
+
+[packages.myapp-utils]
+versioned_files = ["crates/utils/Cargo.toml", { path = "crates/api/Cargo.toml", dependency = "myapp-utils" }, { path = "crates/client/Cargo.toml", dependency = "myapp-utils" }, "Cargo.lock"]
+scopes = ["myapp-utils"]
+
+[packages.myapp-api]
+versioned_files = ["crates/api/Cargo.toml", { path = "crates/client/Cargo.toml", dependency = "myapp-api" }, "Cargo.lock"]
+scopes = ["myapp-api"]
+
+[packages.myapp-client]
+versioned_files = ["crates/client/Cargo.toml", { path = "crates/cli/Cargo.toml", dependency = "myapp-client" }, "Cargo.lock"]
+scopes = ["myapp-client"]
+
+[packages.myapp-cli]
+versioned_files = ["crates/cli/Cargo.toml", "Cargo.lock"]
+scopes = ["myapp-cli"]
+
+[[workflows]]
+name = "release"
+help_text = "Prepare and create a new release (update changelog, bump version, create release)"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+
+[[workflows.steps]]
+type = "Command"
+command = 'git commit -m "chore: prepare releases"'
+
+[[workflows.steps]]
+type = "Release"
+
+[[workflows.steps]]
+type = "Command"
+command = "git push"
+
+[[workflows.steps]]
+type = "Command"
+command = "git push --tags"
+
+[[workflows]]
+name = "document-change"
+help_text = "Create a new change file to be included in the next release"
+
+[[workflows.steps]]
+type = "CreateChangeFile"
