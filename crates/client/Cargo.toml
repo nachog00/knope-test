@@ -1,0 +1,8 @@
+[package]
+name = "myapp-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+myapp-api = { path = "../api" }
+myapp-utils = { path = "../utils" }

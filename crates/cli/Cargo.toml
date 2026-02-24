@@ -1,0 +1,8 @@
+[package]
+name = "myapp-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+myapp-client = { path = "../client" }
+myapp-core = { path = "../core" }

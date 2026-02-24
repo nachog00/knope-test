@@ -1,0 +1,8 @@
+[package]
+name = "myapp-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+myapp-core = { path = "../core" }
+myapp-utils = { path = "../utils" }
