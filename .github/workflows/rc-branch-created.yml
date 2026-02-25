@@ -1,12 +1,14 @@
 name: RC Branch Created
 
 on:
-  create:
+  push:
+    branches:
+      - rc
 
 jobs:
   prepare-rc:
-    # Only run when 'rc' branch is created
-    if: github.ref_type == 'branch' && github.ref_name == 'rc'
+    # Only run if changesets exist (first push to rc)
+    if: ${{ hashFiles('.changeset/*.md') != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
