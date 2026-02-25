@@ -7,8 +7,6 @@ on:
 
 jobs:
   prepare-rc:
-    # Only run if changesets exist (first push to rc)
-    if: ${{ hashFiles('.changeset/*.md') != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
