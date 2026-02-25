@@ -1,0 +1,134 @@
+name: Final Release on Stable
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - stable
+
+jobs:
+  finalize-release:
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'rc'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install knope
+        uses: knope-dev/action@v2
+
+      - name: Finalize release
+        id: release
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+
+          # Get current RC version and strip -rc.N suffix
+          CURRENT=$(grep -m1 '^version = ' crates/cli/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          FINAL_VERSION=$(echo "$CURRENT" | sed 's/-rc\.[0-9]*//')
+
+          echo "Current: $CURRENT -> Final: $FINAL_VERSION"
+
+          # Update all Cargo.toml files to final version
+          for toml in crates/*/Cargo.toml; do
+            sed -i "s/^version = \"$CURRENT\"/version = \"$FINAL_VERSION\"/" "$toml"
+          done
+
+          # Commit version finalization
+          git add -A
+          git commit -m "chore: release $FINAL_VERSION"
+          git push origin stable
+
+          # Create final tag
+          git tag "$FINAL_VERSION"
+          git push origin "$FINAL_VERSION"
+
+          echo "version=$FINAL_VERSION" >> $GITHUB_OUTPUT
+
+  create-release:
+    needs: finalize-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.finalize-release.outputs.version }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.finalize-release.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup-rc-branch:
+    needs: finalize-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete RC branch
+        run: |
+          git push origin --delete rc || echo "RC branch already deleted"
+
+  # Docker builds - only if secrets are configured
+  check-docker-config:
+    needs: finalize-release
+    runs-on: ubuntu-latest
+    outputs:
+      docker_configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check for Docker secrets
+        id: check
+        run: |
+          if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "::notice::Docker secrets not configured - skipping Docker builds"
+          fi
+
+  docker:
+    needs: [finalize-release, check-docker-config]
+    if: needs.check-docker-config.outputs.docker_configured == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_ACCESS_TOKEN }}
+
+      - name: Extract metadata for Docker (default image)
+        id: meta-default
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ vars.DOCKER_RELEASE_REPO || 'myapp' }}
+          tags: |
+            type=raw,value=${{ needs.finalize-release.outputs.version }}
+
+      - name: Build and Push Default Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta-default.outputs.tags }}
+          labels: ${{ steps.meta-default.outputs.labels }}

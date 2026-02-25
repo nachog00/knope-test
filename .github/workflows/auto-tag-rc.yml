@@ -1,0 +1,232 @@
+name: Hotfix Merged to RC
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - 'rc'
+
+jobs:
+  bump-rc:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install knope
+        uses: knope-dev/action@v2
+
+      - name: Bump RC version
+        id: bump
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+
+          # Get current version
+          CURRENT=$(grep -m1 '^version = ' crates/cli/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "Current version: $CURRENT"
+
+          # Extract base version and RC number
+          BASE_VERSION=$(echo "$CURRENT" | sed 's/-rc\.[0-9]*//')
+          RC_NUM=$(echo "$CURRENT" | grep -oP '(?<=-rc\.)\d+' || echo "0")
+          NEXT_RC=$((RC_NUM + 1))
+          NEW_VERSION="${BASE_VERSION}-rc.${NEXT_RC}"
+
+          echo "New version: $NEW_VERSION"
+
+          # Update all Cargo.toml files
+          for toml in crates/*/Cargo.toml; do
+            sed -i "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" "$toml"
+          done
+
+          # Commit version bump
+          git add -A
+          git commit -m "chore: bump to $NEW_VERSION"
+          git push origin rc
+
+          # Create tag
+          git tag "$NEW_VERSION"
+          git push origin "$NEW_VERSION"
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+  create-prerelease:
+    needs: bump-rc
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-rc.outputs.version }}
+
+      - name: Create GitHub Pre-release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.bump-rc.outputs.version }}
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  sync-rc-to-dev:
+    needs: bump-rc
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if sync is needed
+        id: check-sync
+        run: |
+          git fetch origin dev rc
+
+          COMMITS_AHEAD=$(git rev-list --count origin/dev..origin/rc)
+
+          if [ "$COMMITS_AHEAD" -eq 0 ]; then
+            echo "No commits to sync from rc to dev"
+            echo "needs_sync=false" >> $GITHUB_OUTPUT
+          else
+            echo "$COMMITS_AHEAD commits ahead - sync needed"
+            echo "needs_sync=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create or update sync PR
+        if: steps.check-sync.outputs.needs_sync == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ needs.bump-rc.outputs.version }}';
+
+            // Check if a sync PR already exists
+            const existingPRs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:rc`,
+              base: 'dev'
+            });
+
+            if (existingPRs.data.length > 0) {
+              const existingPR = existingPRs.data[0];
+              console.log(`Sync PR already exists: #${existingPR.number}`);
+
+              // Add a comment noting the new RC version
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingPR.number,
+                body: `🏷️ New RC version: \`${version}\`\n\nThis PR now includes changes up to this release candidate.`
+              });
+
+              console.log(`Added comment to PR #${existingPR.number}`);
+              return;
+            }
+
+            // Ensure labels exist
+            const labels = [
+              { name: 'sync', color: '0366d6', description: 'Sync PR from RC back to dev' },
+              { name: 'automated', color: '6c757d', description: 'PR created by CI automation' }
+            ];
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description
+                });
+              } catch (e) {
+                if (e.status !== 422) throw e;
+              }
+            }
+
+            // Create new sync PR
+            const pr = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Sync rc to dev`,
+              body: `## Automated RC Sync
+
+This PR syncs changes from \`rc\` back to \`dev\` to prevent branch deviation.
+
+**Initially triggered by:** ${version}
+
+### Review Notes
+- This PR automatically stays up-to-date as new commits land on \`rc\`
+- Please review any hotfix changes that were applied directly to the RC branch
+- Resolve any merge conflicts that may arise
+- Merge this after the RC is finalized or periodically to keep dev in sync
+
+---
+*This PR was automatically created by CI.*`,
+              head: 'rc',
+              base: 'dev'
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.data.number,
+              labels: ['sync', 'automated']
+            });
+
+            console.log(`Created PR #${pr.data.number}: ${pr.data.html_url}`);
+
+  update-release-pr:
+    needs: bump-rc
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Update release PR title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ needs.bump-rc.outputs.version }}';
+
+            // Find the release PR
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:rc`,
+              base: 'stable'
+            });
+
+            if (prs.data.length === 0) {
+              console.log('No release PR found');
+              return;
+            }
+
+            const pr = prs.data[0];
+
+            // Update PR title with new version
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              title: `Release ${version}`
+            });
+
+            // Add comment about version bump
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: `🔄 Version bumped to \`${version}\` after hotfix merge.`
+            });
+
+            console.log(`Updated release PR #${pr.number} to version ${version}`);

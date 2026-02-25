@@ -1,0 +1,140 @@
+name: RC Branch Created
+
+on:
+  create:
+
+jobs:
+  prepare-rc:
+    # Only run when 'rc' branch is created
+    if: github.ref_type == 'branch' && github.ref_name == 'rc'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install knope
+        uses: knope-dev/action@v2
+
+      - name: Prepare release candidate
+        id: prepare
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+
+          # Run knope prepare-rc to bump versions with -rc.1 suffix
+          knope prepare-rc --verbose
+
+          # Extract version from one of the Cargo.toml files
+          VERSION=$(grep -m1 '^version = ' crates/cli/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Push the version bump commit
+          git push origin rc
+
+      - name: Create RC tag
+        run: |
+          VERSION="${{ steps.prepare.outputs.version }}"
+          git tag "$VERSION"
+          git push origin "$VERSION"
+
+      - name: Ensure labels exist
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              { name: 'release', color: '28a745', description: 'Release PR from RC to stable' },
+              { name: 'sync', color: '0366d6', description: 'Sync PR from RC back to dev' },
+              { name: 'hotfix', color: 'd93f0b', description: 'Hotfix PR targeting RC branch' },
+              { name: 'automated', color: '6c757d', description: 'PR created by CI automation' }
+            ];
+
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description
+                });
+                console.log(`Created label: ${label.name}`);
+              } catch (e) {
+                if (e.status === 422) {
+                  console.log(`Label already exists: ${label.name}`);
+                } else {
+                  throw e;
+                }
+              }
+            }
+
+      - name: Create release PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ steps.prepare.outputs.version }}';
+
+            // Check if release PR already exists
+            const existingPRs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:rc`,
+              base: 'stable'
+            });
+
+            if (existingPRs.data.length > 0) {
+              console.log(`Release PR already exists: #${existingPRs.data[0].number}`);
+              return;
+            }
+
+            let pr;
+            try {
+              pr = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Release ${version}`,
+                body: `## Release ${version}
+
+This PR will release version \`${version}\` when merged to stable.
+
+### Version derived from changesets by knope
+
+### Checklist
+- [ ] All hotfixes have been applied and tested
+- [ ] RC has been validated
+- [ ] Ready for release
+
+---
+*This PR was automatically created when the \`rc\` branch was pushed.*`,
+                head: 'rc',
+                base: 'stable'
+              });
+            } catch (e) {
+              if (e.message?.includes('No commits between')) {
+                console.log(`No commits between stable and rc yet`);
+                return;
+              }
+              throw e;
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.data.number,
+              labels: ['release', 'automated']
+            });
+
+            console.log(`Created release PR #${pr.data.number}: ${pr.data.html_url}`);
+
+      - name: Create GitHub Pre-release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.prepare.outputs.version }}
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}

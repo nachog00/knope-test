@@ -1,48 +1,62 @@
 [packages.myapp-core]
-versioned_files = ["crates/core/Cargo.toml", { path = "crates/api/Cargo.toml", dependency = "myapp-core" }, { path = "crates/cli/Cargo.toml", dependency = "myapp-core" }, "Cargo.lock"]
-scopes = ["myapp-core"]
+versioned_files = ["crates/core/Cargo.toml"]
+changelog = "crates/core/CHANGELOG.md"
+scopes = ["core", "myapp-core"]
 
 [packages.myapp-utils]
-versioned_files = ["crates/utils/Cargo.toml", { path = "crates/api/Cargo.toml", dependency = "myapp-utils" }, { path = "crates/client/Cargo.toml", dependency = "myapp-utils" }, "Cargo.lock"]
-scopes = ["myapp-utils"]
+versioned_files = ["crates/utils/Cargo.toml"]
+changelog = "crates/utils/CHANGELOG.md"
+scopes = ["utils", "myapp-utils"]
 
 [packages.myapp-api]
-versioned_files = ["crates/api/Cargo.toml", { path = "crates/client/Cargo.toml", dependency = "myapp-api" }, "Cargo.lock"]
-scopes = ["myapp-api"]
+versioned_files = ["crates/api/Cargo.toml"]
+changelog = "crates/api/CHANGELOG.md"
+scopes = ["api", "myapp-api"]
 
 [packages.myapp-client]
-versioned_files = ["crates/client/Cargo.toml", { path = "crates/cli/Cargo.toml", dependency = "myapp-client" }, "Cargo.lock"]
-scopes = ["myapp-client"]
+versioned_files = ["crates/client/Cargo.toml"]
+changelog = "crates/client/CHANGELOG.md"
+scopes = ["client", "myapp-client"]
 
 [packages.myapp-cli]
-versioned_files = ["crates/cli/Cargo.toml", "Cargo.lock"]
-scopes = ["myapp-cli"]
+versioned_files = ["crates/cli/Cargo.toml"]
+changelog = "crates/cli/CHANGELOG.md"
+scopes = ["cli", "myapp-cli"]
 
+# Cargo.lock is updated automatically by cargo when versions change
+
+# Workflow for creating RC prereleases
+[[workflows]]
+name = "prepare-rc"
+help_text = "Prepare a release candidate (bump versions with -rc.N suffix, update changelogs)"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+prerelease_label = "rc"
+
+[[workflows.steps]]
+type = "Command"
+command = "git add -A && git commit -m 'chore: prepare release candidate'"
+
+# Workflow for final release (removes prerelease suffix)
 [[workflows]]
 name = "release"
-help_text = "Prepare and create a new release (update changelog, bump version, create release)"
+help_text = "Create final release (finalize versions, update changelogs, tag, push)"
 
 [[workflows.steps]]
 type = "PrepareRelease"
 
 [[workflows.steps]]
 type = "Command"
-command = 'git commit -m "chore: prepare releases"'
+command = "git add -A && git commit -m 'chore: prepare release'"
 
 [[workflows.steps]]
 type = "Release"
 
-[[workflows.steps]]
-type = "Command"
-command = "git push"
-
-[[workflows.steps]]
-type = "Command"
-command = "git push --tags"
-
+# Workflow for documenting changes
 [[workflows]]
 name = "document-change"
-help_text = "Create a new change file to be included in the next release"
+help_text = "Create a new changeset file to be included in the next release"
 
 [[workflows.steps]]
 type = "CreateChangeFile"
